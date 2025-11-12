@@ -73,12 +73,12 @@ def get_magick_executable():
     """Tries to determine if 'convert' or 'magick' is the correct ImageMagick command."""
     try:
         # First try the default 'convert' name
-        subprocess.run(['convert', '-version'], check=True, capture_output=True)
+        subprocess.run(['convert', '-version'], check=True, capture_output=True, text=True)
         return 'convert'
     except (subprocess.CalledProcessError, FileNotFoundError):
         try:
             # Fallback to 'magick' which is often the name on Windows now
-            subprocess.run(['magick', '-version'], check=True, capture_output=True)
+            subprocess.run(['magick', '-version'], check=True, capture_output=True, text=True)
             return 'magick'
         except (subprocess.CalledProcessError, FileNotFoundError):
             # If neither is found, we fall back to 'convert' but expect failure.
@@ -120,17 +120,19 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > Skipping game: Logo URL(s) missing from API data (Away URL: {'Present' if away_team['logo_url'] else 'Missing'}, Home URL: {'Present' if home_team['logo_url'] else 'Missing'}).")
         return False
 
-    # 1.5. Resize Logos and Save (Using the determined executable name)
+    # 1.5. Resize Logos and Save (Using single string command with shell=True for Windows compatibility)
     print("  > Resizing logos...")
     try:
-        # Resize Away Logo
-        subprocess.run([magick_cmd, away_logo_dl_path, '-resize', LOGO_SIZE, away_logo_resized_path], 
-                       check=True, capture_output=True)
-        # Resize Home Logo
-        subprocess.run([magick_cmd, home_logo_dl_path, '-resize', LOGO_SIZE, home_logo_resized_path], 
-                       check=True, capture_output=True)
+        # Construct command as a single string and use shell=True, adding quotes around paths for safety
+        away_resize_cmd = f'{magick_cmd} "{away_logo_dl_path}" -resize {LOGO_SIZE} "{away_logo_resized_path}"'
+        subprocess.run(away_resize_cmd, shell=True, check=True, capture_output=True, text=True)
+        
+        home_resize_cmd = f'{magick_cmd} "{home_logo_dl_path}" -resize {LOGO_SIZE} "{home_logo_resized_path}"'
+        subprocess.run(home_resize_cmd, shell=True, check=True, capture_output=True, text=True)
+        
     except subprocess.CalledProcessError as e:
         print(f"  > ERROR: Logo resizing failed. Check ImageMagick installation.")
+        print(f"  > The command used was: {e.cmd}")
         print(f"  > Stderr: {e.stderr}")
         return False
     
@@ -150,7 +152,8 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         game_time_str = "TIME TBD"
 
     # 3. ImageMagick Command Construction (Diagonal Split and White Line)
-    # Logo Y positions adjusted for increased visual separation from the diagonal line: +90 and +210
+    # The final command is still passed as a list, which is safer when shell=False (default).
+    # Since we are using pre-resized files, this command should be safe.
     
     command = [
         magick_cmd, # Use the determined executable
@@ -190,7 +193,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     print(f"  > Generating graphic: {output_file}")
     
     try:
-        # The command array already starts with magick_cmd
+        # This final command should be safe to run as a list
         subprocess.run(command, check=True, capture_output=True, text=True)
         print(f"  > SUCCESS: Graphic saved to {output_file}")
         return True
