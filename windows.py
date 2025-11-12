@@ -69,16 +69,33 @@ def download_file(url, local_path):
 
 # --- Core Logic Functions (Modified) ---
 
+def get_magick_executable():
+    """Tries to determine if 'convert' or 'magick' is the correct ImageMagick command."""
+    try:
+        # First try the default 'convert' name
+        subprocess.run(['convert', '-version'], check=True, capture_output=True)
+        return 'convert'
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        try:
+            # Fallback to 'magick' which is often the name on Windows now
+            subprocess.run(['magick', '-version'], check=True, capture_output=True)
+            return 'magick'
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            # If neither is found, we fall back to 'convert' but expect failure.
+            return 'convert'
+
 def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     """
     Generates the final diagonal split, white-bordered game graphic with game time
     using ImageMagick. Returns True on success, False on failure.
     """
+    # Determine the ImageMagick executable name once for this function
+    magick_cmd = get_magick_executable()
+    
     game_id = f"{away_team['abbrev']}_vs_{home_team['abbrev']}"
     output_file = os.path.join(output_dir, f"{league_name}_{game_id}.png")
     
     # Paths for temporary downloaded logos
-    # Original download paths
     away_logo_dl_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_dl.png")
     home_logo_dl_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_dl.png")
     # Resized paths (these are the files we use for the final composite)
@@ -103,14 +120,14 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > Skipping game: Logo URL(s) missing from API data (Away URL: {'Present' if away_team['logo_url'] else 'Missing'}, Home URL: {'Present' if home_team['logo_url'] else 'Missing'}).")
         return False
 
-    # 1.5. Resize Logos and Save (Fix for Windows parentheses issue)
+    # 1.5. Resize Logos and Save (Using the determined executable name)
     print("  > Resizing logos...")
     try:
         # Resize Away Logo
-        subprocess.run(['convert', away_logo_dl_path, '-resize', LOGO_SIZE, away_logo_resized_path], 
+        subprocess.run([magick_cmd, away_logo_dl_path, '-resize', LOGO_SIZE, away_logo_resized_path], 
                        check=True, capture_output=True)
         # Resize Home Logo
-        subprocess.run(['convert', home_logo_dl_path, '-resize', LOGO_SIZE, home_logo_resized_path], 
+        subprocess.run([magick_cmd, home_logo_dl_path, '-resize', LOGO_SIZE, home_logo_resized_path], 
                        check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
         print(f"  > ERROR: Logo resizing failed. Check ImageMagick installation.")
@@ -123,10 +140,9 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         dt_utc = datetime.datetime.strptime(raw_time_str, '%Y-%m-%dT%H:%MZ').replace(tzinfo=datetime.timezone.utc)
         
         # Adjusting to Central Time (CT). UTC-6 offset.
-        # This assumes no daylight savings time adjustment, which is acceptable for a daily sports schedule.
         dt_local = dt_utc - datetime.timedelta(hours=6) 
         game_time_str = dt_local.strftime('%I:%M %p CT')
-        # Remove leading zero for cleaner time display (e.g., '07:30 PM' -> '7:30 PM')
+        # Remove leading zero for cleaner time display
         if game_time_str.startswith('0'):
             game_time_str = game_time_str[1:]
     except Exception as e:
@@ -134,32 +150,26 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         game_time_str = "TIME TBD"
 
     # 3. ImageMagick Command Construction (Diagonal Split and White Line)
-
-    # Logo X positions remain centered in their 250px halves: Away +25, Home +275
-    # Logo Y positions adjusted for increased visual separation from the diagonal line:
-    # Away (Top-Right Quadrant): Moved UP 60px: 150 -> +90
-    # Home (Bottom-Left Quadrant): Moved DOWN 60px: 150 -> +210
+    # Logo Y positions adjusted for increased visual separation from the diagonal line: +90 and +210
     
     command = [
-        'convert', 
+        magick_cmd, # Use the determined executable
         '-size', IMAGE_SIZE, 
         
         # 1. Create the base canvas (Away Team Color, covering the Top-Right portion)
         f'xc:{away_team["color"]}', 
         
         # 2. Draw the Home Team's color (Bottom-Left triangle)
-        # Polygon points: (0, 500) bottom-left, (500, 0) top-right, (500, 500) bottom-right
         '-fill', home_team['color'],
         '-draw', 'polygon 0,500 500,0 500,500', 
         
         # 3. Draw the white diagonal dividing line (4px stroke)
-        # Line from (5, 495) to (495, 5) to create a centered white line
         '-strokewidth', '4',
         '-stroke', 'white',
         '-fill', 'none',
         '-draw', 'line 5,495 495,5',
         
-        # 4. Composite Logos (Now referencing the pre-resized files directly)
+        # 4. Composite Logos (Referencing the pre-resized files directly)
         away_logo_resized_path,
         '-geometry', '+25+90', '-composite', 
         
@@ -179,26 +189,8 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
 
     print(f"  > Generating graphic: {output_file}")
     
-    # We don't need the font check if we switch to saving and using files explicitly.
-    # The font check logic was causing issues by calling 'identify', so we remove it.
-    
     try:
-        # Explicitly use 'magick' for better Windows compatibility if 'convert' is aliased
-        # We check the system for ImageMagick executable name
-        try:
-            # First try the default 'convert' name
-            subprocess.run(['convert', '-version'], check=True, capture_output=True)
-            magick_cmd = 'convert'
-        except subprocess.CalledProcessError:
-            # Fallback to 'magick' which is often the name on Windows now
-            subprocess.run(['magick', '-version'], check=True, capture_output=True)
-            magick_cmd = 'magick'
-        except FileNotFoundError:
-            # Fallback if neither is found
-            magick_cmd = 'convert' # Revert to default for the command array setup
-            
-        command[0] = magick_cmd # Update the command array with the correct executable
-            
+        # The command array already starts with magick_cmd
         subprocess.run(command, check=True, capture_output=True, text=True)
         print(f"  > SUCCESS: Graphic saved to {output_file}")
         return True
