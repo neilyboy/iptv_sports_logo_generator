@@ -104,9 +104,12 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     home_logo_dl_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_dl.png")
     
     # Intermediate paths after resizing AND background removal (clean, transparent logo)
-    # RENAME to be clearer: this is the file used to create the glow
     away_logo_transparent_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_transparent.png")
     home_logo_transparent_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_transparent.png")
+
+    # Intermediate paths for the white GLOW ONLY layer
+    away_logo_glow_only_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_glow_only.png")
+    home_logo_glow_only_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_glow_only.png")
     
     # Final paths after adding the white glow/outline (THESE FILES ARE USED IN THE FINAL COMPOSITE)
     away_logo_final_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_final.png")
@@ -130,7 +133,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         # We increase FUZZ_LEVEL to 20% for more aggressive white removal.
         FUZZ_LEVEL = '20%' 
         
-        # AWAY TEAM: DL -> Transparent (Resize, then aggressively remove white background)
+        # AWAY TEAM: DL -> Transparent (Resize, trim, and aggressively remove white background)
         subprocess.run([magick_cmd, away_logo_dl_path, 
                         '-resize', LOGO_SIZE,
                         # Trim any uniform padding first, then aggressively remove white
@@ -140,7 +143,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
                         away_logo_transparent_path],
                        check=True, capture_output=True, text=True)
 
-        # HOME TEAM: DL -> Transparent (Resize, then aggressively remove white background)
+        # HOME TEAM: DL -> Transparent (Resize, trim, and aggressively remove white background)
         subprocess.run([magick_cmd, home_logo_dl_path, 
                         '-resize', LOGO_SIZE, 
                         '-trim', '+repage',
@@ -160,41 +163,42 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     OUTLINE_BLUR = '3x2' 
     
     try:
-        # AWAY TEAM GLOW (Transparent -> Final)
+        # 1. Create the dedicated white glow layer first (AWAY)
         subprocess.run([
-            magick_cmd, away_logo_transparent_path, # 1. Transparent Logo
-            '(', 
-                '+clone',               # 2. Clones Logo
-                '-alpha', 'extract',    # 3. Extracts alpha/silhouette
-                '-fill', 'white',       # 4. Sets color to white
-                '-colorize', '100%',    # 5. Makes silhouette solid white
-                '-blur', OUTLINE_BLUR,  # 6. Blurs for glow effect (This is the white shadow)
-            ')', # Stack is now [Transparent Logo, White Glow]
-            
-            '+swap', # Swap order to [White Glow, Transparent Logo]
-            
-            '-background', 'none',
-            '-compose', 'Over', # Compose Transparent Logo (top) OVER Glow (bottom)
-            '-flatten', 
+            magick_cmd, away_logo_transparent_path,
+            '-alpha', 'extract',      # Extract alpha/silhouette
+            '-fill', 'white',         # Set color to white
+            '-colorize', '100%',      # Make silhouette solid white
+            '-blur', OUTLINE_BLUR,    # Blur for glow effect
+            away_logo_glow_only_path
+        ], check=True, capture_output=True, text=True)
+
+        # 2. Composite the original transparent logo ON TOP of the white glow layer (AWAY)
+        subprocess.run([
+            magick_cmd, away_logo_glow_only_path, # Start with the glow layer (bottom)
+            away_logo_transparent_path,           # Overlay the clean transparent logo (top)
+            '-compose', 'Over',
+            '-composite', 
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
         
-        # HOME TEAM GLOW (Transparent -> Final)
+        
+        # 3. Create the dedicated white glow layer first (HOME)
         subprocess.run([
-            magick_cmd, home_logo_transparent_path, # 1. Transparent Logo
-            '(', 
-                '+clone', 
-                '-alpha', 'extract', 
-                '-fill', 'white', 
-                '-colorize', '100%', 
-                '-blur', OUTLINE_BLUR, 
-            ')', # Stack is now [Transparent Logo, White Glow]
-            
-            '+swap', # Swap order to [White Glow, Transparent Logo]
-            
-            '-background', 'none',
-            '-compose', 'Over', # Compose Transparent Logo (top) OVER Glow (bottom)
-            '-flatten', 
+            magick_cmd, home_logo_transparent_path,
+            '-alpha', 'extract',
+            '-fill', 'white', 
+            '-colorize', '100%',
+            '-blur', OUTLINE_BLUR,
+            home_logo_glow_only_path
+        ], check=True, capture_output=True, text=True)
+
+        # 4. Composite the original transparent logo ON TOP of the white glow layer (HOME)
+        subprocess.run([
+            magick_cmd, home_logo_glow_only_path, # Start with the glow layer (bottom)
+            home_logo_transparent_path,           # Overlay the clean transparent logo (top)
+            '-compose', 'Over', 
+            '-composite', 
             home_logo_final_path
         ], check=True, capture_output=True, text=True)
 
@@ -259,6 +263,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         # Clean up all temporary logo files
         temp_files = [away_logo_dl_path, home_logo_dl_path, 
                       away_logo_transparent_path, home_logo_transparent_path,
+                      away_logo_glow_only_path, home_logo_glow_only_path,
                       away_logo_final_path, home_logo_final_path]
         for f in temp_files:
             try:
