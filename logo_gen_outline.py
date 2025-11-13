@@ -111,7 +111,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     away_logo_cleaned_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_cleaned.png")
     home_logo_cleaned_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_cleaned.png")
     
-    # Final paths after adding the white glow/outline
+    # Final paths after adding the white glow/outline (THESE FILES ARE USED IN THE FINAL COMPOSITE)
     away_logo_final_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_final.png")
     home_logo_final_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_final.png")
 
@@ -147,7 +147,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         # Use fuzz to remove white pixels, making the background truly transparent
         FUZZ_LEVEL = '10%' 
         
-        # Resized -> Cleaned
+        # Resized -> Cleaned (Removes the background, making logos ready for the glow treatment)
         subprocess.run([magick_cmd, away_logo_resized_path, 
                         '-fuzz', FUZZ_LEVEL, 
                         '-transparent', 'white', 
@@ -164,7 +164,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > ERROR: Background removal failed. Stderr: {e.stderr}")
         return False
 
-    # --- GLOW/OUTLINE STEP (FIX: Use +swap to put the logo back on top of the glow) ---
+    # --- GLOW/OUTLINE STEP (Puts the logo back over the glow) ---
     print("  > Applying crisp white outline/glow using alpha method...")
     
     # The '3x2' setting means Radius=3, Sigma=2. Controls the width and sharpness of the glow.
@@ -182,10 +182,10 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
                 '-blur', OUTLINE_BLUR,  # 6. Blurs for glow effect
             ')', # Stack is now [Logo, Glow]
             
-            '+swap', # FIX: Swap order to [Glow, Logo]
+            '+swap', # Swap order to [Glow, Logo]
             
             '-background', 'none',
-            '-compose', 'Over', # Use default composition: Logo (top) OVER Glow (bottom)
+            '-compose', 'Over', # Compose Logo (top) OVER Glow (bottom)
             '-flatten', 
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
@@ -201,10 +201,10 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
                 '-blur', OUTLINE_BLUR, 
             ')', # Stack is now [Logo, Glow]
             
-            '+swap', # FIX: Swap order to [Glow, Logo]
+            '+swap', # Swap order to [Glow, Logo]
             
             '-background', 'none',
-            '-compose', 'Over', # Use default composition: Logo (top) OVER Glow (bottom)
+            '-compose', 'Over', # Compose Logo (top) OVER Glow (bottom)
             '-flatten', 
             home_logo_final_path
         ], check=True, capture_output=True, text=True)
@@ -239,8 +239,8 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         '-fill', 'none',
         '-draw', 'line 5,495 495,5',
         
-        # 4. Composite Logos (Using the final, glow-added files)
-        # Note: These files now contain the logo AND the crisp outline/glow behind it.
+        # 4. Composite Logos (***CRITICAL FIX HERE: USE *_final_path***)
+        # These files now contain the logo AND the crisp outline/glow behind it.
         away_logo_final_path,
         '-geometry', '+20+80', '-composite', 
         
