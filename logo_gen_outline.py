@@ -33,7 +33,7 @@ def get_output_dir():
     return os.path.join("game_graphics", date_formatted)
 
 IMAGE_SIZE = "500x500" # Target final image size
-# Slightly larger logo size to accommodate the 5-pixel border
+# Slightly larger logo size to accommodate the 5-pixel border/glow
 LOGO_SIZE = "220x220" 
 
 # --- Helper Functions ---
@@ -75,7 +75,7 @@ def download_file(url, local_path):
         print(f"  > ERROR: Failed to download {url}. {e}")
         return False
 
-# --- Core Logic Functions (Modified for Border) ---
+# --- Core Logic Functions (Modified for Shape-Following Glow) ---
 
 def get_magick_executable():
     """Determines if 'convert' or 'magick' is the correct ImageMagick command."""
@@ -91,7 +91,7 @@ def get_magick_executable():
 
 def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     """
-    Generates the final game graphic, now including a white border around logos.
+    Generates the final game graphic, now including a shape-following white glow around logos.
     """
     magick_cmd = get_magick_executable()
     
@@ -106,7 +106,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     away_logo_resized_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_resized.png")
     home_logo_resized_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_resized.png")
     
-    # Final paths after adding the white border (These are used for the composite)
+    # Final paths after adding the white glow (These are used for the composite)
     away_logo_final_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_final.png")
     home_logo_final_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_final.png")
 
@@ -137,26 +137,42 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         return False
         
     # 1.6. Add White Border (Outline) to Logos
-    print("  > Adding white outline...")
+    print("  > Adding white outline/glow...")
     try:
-        # Add a 5-pixel white border to lift the logo off the background
-        # +repage is used to clean up the virtual canvas created by -border
-        subprocess.run([magick_cmd, away_logo_resized_path, 
-                        '-bordercolor', 'white', 
-                        '-border', '5x5', 
-                        '+repage', 
-                        away_logo_final_path], 
-                       check=True, capture_output=True, text=True)
+        # ImageMagick command to create a white shadow/glow that follows the logo's shape
+        # This uses the +clone -shadow technique for a shape-following glow/outline.
+        
+        # AWAY TEAM GLOW
+        subprocess.run([
+            magick_cmd, away_logo_resized_path, 
+            '(', '+clone', 
+                '-background', 'white',
+                # Create a shadow that is 100% opaque, 5px radius/blur, and 0 offset (centered)
+                '-shadow', '100x5+0+0', 
+            ')',
+            '+swap', 
+            '-background', 'none',
+            '-compose', 'DstOver', # Places the original image over the shadow clone
+            '-flatten', 
+            away_logo_final_path
+        ], check=True, capture_output=True, text=True)
 
-        subprocess.run([magick_cmd, home_logo_resized_path, 
-                        '-bordercolor', 'white', 
-                        '-border', '5x5', 
-                        '+repage', 
-                        home_logo_final_path], 
-                       check=True, capture_output=True, text=True)
+        # HOME TEAM GLOW
+        subprocess.run([
+            magick_cmd, home_logo_resized_path, 
+            '(', '+clone', 
+                '-background', 'white',
+                '-shadow', '100x5+0+0', 
+            ')',
+            '+swap', 
+            '-background', 'none',
+            '-compose', 'DstOver', 
+            '-flatten', 
+            home_logo_final_path
+        ], check=True, capture_output=True, text=True)
 
     except subprocess.CalledProcessError as e:
-        print(f"  > ERROR: Adding border failed. Stderr: {e.stderr}")
+        print(f"  > ERROR: Adding glow failed. Stderr: {e.stderr}")
         return False
 
     
@@ -185,7 +201,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         '-fill', 'none',
         '-draw', 'line 5,495 495,5',
         
-        # 4. Composite Logos (Using the final, bordered files)
+        # 4. Composite Logos (Using the final, glow-added files)
         away_logo_final_path,
         '-geometry', '+20+80', '-composite', # Adjusted position for new size
         
