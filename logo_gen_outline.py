@@ -164,9 +164,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > ERROR: Background removal failed. Stderr: {e.stderr}")
         return False
 
-    # --- GLOW/OUTLINE STEP (Using alpha extract for cleaner composition) ---
-    # This method creates a white silhouette, blurs it slightly, and places it 
-    # cleanly behind the original colored logo.
+    # --- GLOW/OUTLINE STEP (Fix: Ensure the original logo is composed over the glow) ---
     print("  > Applying crisp white outline/glow using alpha method...")
     
     # The '3x2' setting means Radius=3, Sigma=2. Controls the width and sharpness of the glow.
@@ -183,14 +181,14 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
                 '-colorize', '100%',    # 4. Colorize the black silhouette white
                 '-blur', OUTLINE_BLUR,  # 5. Apply the slight blur for the glow effect
             ')',
-            # Now the stack is: [Original Logo], [White Shadow]
-            '+swap',                    # 6. Swap the order: [White Shadow] [Original Logo]
+            # --- START FIX: Ensure DstOver works correctly by flattening the glow image first ---
             '-background', 'none',
-            '-compose', 'DstOver',      # 7. Composition: Put Original (Source) OVER Shadow (Destination)
+            '-compose', 'DstOver',      # Composition: Put Original (Source) OVER Shadow (Destination)
             '-flatten', 
+            # --- END FIX ---
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
-
+        
         # HOME TEAM GLOW (Cleaned -> Final)
         subprocess.run([
             magick_cmd, home_logo_cleaned_path, 
@@ -201,10 +199,11 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
                 '-colorize', '100%', 
                 '-blur', OUTLINE_BLUR, 
             ')',
-            '+swap', 
+            # --- START FIX ---
             '-background', 'none',
             '-compose', 'DstOver', 
             '-flatten', 
+            # --- END FIX ---
             home_logo_final_path
         ], check=True, capture_output=True, text=True)
 
