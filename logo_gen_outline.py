@@ -103,7 +103,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     away_logo_dl_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_dl.png")
     home_logo_dl_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_dl.png")
     
-    # Intermediate paths after resizing AND background removal (clean, transparent logo)
+    # Intermediate paths after resizing AND trimming (clean, transparent logo)
     away_logo_transparent_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_transparent.png")
     home_logo_transparent_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_transparent.png")
 
@@ -127,33 +127,27 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > Skipping game: Logo URL(s) missing.")
         return False
 
-    # 1.5. Resize Logos and Remove White Background (Combined for robustness)
-    print("  > Resizing and aggressively removing white background...")
+    # 1.5. Resize Logos and Aggressively Trim (Removing transparent canvas padding)
+    print("  > Resizing and trimming transparent padding...")
     try:
-        # We increase FUZZ_LEVEL to 20% for more aggressive white removal.
-        FUZZ_LEVEL = '20%' 
         
-        # AWAY TEAM: DL -> Transparent (Resize, trim, and aggressively remove white background)
+        # AWAY TEAM: DL -> Transparent (Resize, then trim transparent padding)
         subprocess.run([magick_cmd, away_logo_dl_path, 
                         '-resize', LOGO_SIZE,
-                        # Trim any uniform padding first, then aggressively remove white
+                        # Trim any transparent padding and reset page offset
                         '-trim', '+repage',
-                        '-fuzz', FUZZ_LEVEL, 
-                        '-transparent', 'white', 
                         away_logo_transparent_path],
                        check=True, capture_output=True, text=True)
 
-        # HOME TEAM: DL -> Transparent (Resize, trim, and aggressively remove white background)
+        # HOME TEAM: DL -> Transparent (Resize, then trim transparent padding)
         subprocess.run([magick_cmd, home_logo_dl_path, 
                         '-resize', LOGO_SIZE, 
                         '-trim', '+repage',
-                        '-fuzz', FUZZ_LEVEL, 
-                        '-transparent', 'white', 
                         home_logo_transparent_path],
                        check=True, capture_output=True, text=True)
                        
     except subprocess.CalledProcessError as e:
-        print(f"  > ERROR: Logo resizing/cleaning failed. Stderr: {e.stderr}")
+        print(f"  > ERROR: Logo resizing/trimming failed. Stderr: {e.stderr}")
         return False
 
     # --- GLOW/OUTLINE STEP (Puts the logo back over the glow) ---
