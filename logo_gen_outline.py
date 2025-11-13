@@ -155,34 +155,44 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     
     # The '3x2' setting means Radius=3, Sigma=2. Controls the width and sharpness of the glow.
     OUTLINE_BLUR = '3x2' 
+    # The padding needed to allow the blur to spread without being cut off.
+    GLOW_PADDING = '5x5'
     
     try:
-        # 1. Create the dedicated white glow layer first (AWAY)
+        # 1. Create the dedicated white glow layer first (AWAY) - CRITICAL FIX HERE
         subprocess.run([
             magick_cmd, away_logo_transparent_path,
-            '-alpha', 'extract',      # Extract alpha/silhouette
-            '-fill', 'white',         # Set color to white
-            '-colorize', '100%',      # Make silhouette solid white
-            '-blur', OUTLINE_BLUR,    # Blur for glow effect
+            '-alpha', 'extract',      # 1. Extract alpha/silhouette
+            '-fill', 'white',         # 2. Set color to white
+            '-colorize', '100%',      # 3. Make silhouette solid white
+            # 4. CRITICAL: Force the transparent background and expand the canvas
+            '-virtual-pixel', 'Transparent', 
+            '-extent', f'{GLOW_PADDING}', # Expand the canvas by 5 pixels in each direction
+            '-blur', OUTLINE_BLUR,    # 5. Blur for glow effect
             away_logo_glow_only_path
         ], check=True, capture_output=True, text=True)
 
         # 2. Composite the original transparent logo ON TOP of the white glow layer (AWAY)
+        # Note: We must center the original logo on the newly padded glow canvas.
         subprocess.run([
             magick_cmd, away_logo_glow_only_path, # Start with the glow layer (bottom)
             away_logo_transparent_path,           # Overlay the clean transparent logo (top)
             '-compose', 'Over',
+            '-gravity', 'Center',                 # Center the logo on the glow canvas
             '-composite', 
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
         
         
-        # 3. Create the dedicated white glow layer first (HOME)
+        # 3. Create the dedicated white glow layer first (HOME) - CRITICAL FIX HERE
         subprocess.run([
             magick_cmd, home_logo_transparent_path,
             '-alpha', 'extract',
             '-fill', 'white', 
             '-colorize', '100%',
+            # CRITICAL: Force the transparent background and expand the canvas
+            '-virtual-pixel', 'Transparent',
+            '-extent', f'{GLOW_PADDING}',
             '-blur', OUTLINE_BLUR,
             home_logo_glow_only_path
         ], check=True, capture_output=True, text=True)
@@ -192,6 +202,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
             magick_cmd, home_logo_glow_only_path, # Start with the glow layer (bottom)
             home_logo_transparent_path,           # Overlay the clean transparent logo (top)
             '-compose', 'Over', 
+            '-gravity', 'Center',                 # Center the logo on the glow canvas
             '-composite', 
             home_logo_final_path
         ], check=True, capture_output=True, text=True)
