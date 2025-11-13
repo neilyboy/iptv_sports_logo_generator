@@ -5,11 +5,22 @@ import os
 import subprocess
 import time
 import shutil
+import sys
 
 # --- Configuration ---
 # Set the date for the schedule. Defaults to today's date.
 # Format: YYYYMMDD
-TARGET_DATE = datetime.date.today().strftime("%Y%m%d")
+# Can be overridden by command-line argument: python3 logo_gen.py 20251115
+if len(sys.argv) > 1:
+    TARGET_DATE = sys.argv[1]
+    # Validate the date format
+    try:
+        datetime.datetime.strptime(TARGET_DATE, "%Y%m%d")
+    except ValueError:
+        print(f"ERROR: Invalid date format '{TARGET_DATE}'. Please use YYYYMMDD format (e.g., 20251115)")
+        sys.exit(1)
+else:
+    TARGET_DATE = datetime.date.today().strftime("%Y%m%d")
 
 # Define the sports and leagues to process.
 # To process ALL these, ensure your main execution loop iterates over this list.
@@ -21,7 +32,7 @@ LEAGUE_CONFIGS = [
     {"sport": "baseball", "league": "mlb", "name": "MLB"},
 ]
 
-BASE_OUTPUT_DIR = "game_graphics"
+BASE_OUTPUT_DIR = os.path.join("game_graphics", TARGET_DATE)
 IMAGE_SIZE = "500x500" # Target final image size
 LOGO_SIZE = "200x200" # Size to which the downloaded logos will be resized
 
@@ -314,6 +325,8 @@ def process_league(config):
 
 def main():
     """Main function to run the process for all configured leagues."""
+    
+    print(f"=== Processing games for date: {TARGET_DATE} ===\n")
     
     # Ensure the base output directory exists
     if not os.path.exists(BASE_OUTPUT_DIR):
