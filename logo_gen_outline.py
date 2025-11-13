@@ -164,7 +164,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > ERROR: Background removal failed. Stderr: {e.stderr}")
         return False
 
-    # --- GLOW/OUTLINE STEP (Fix: Ensure the original logo is composed over the glow) ---
+    # --- GLOW/OUTLINE STEP (FIX: Use +swap to put the logo back on top of the glow) ---
     print("  > Applying crisp white outline/glow using alpha method...")
     
     # The '3x2' setting means Radius=3, Sigma=2. Controls the width and sharpness of the glow.
@@ -173,37 +173,39 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     try:
         # AWAY TEAM GLOW (Cleaned -> Final)
         subprocess.run([
-            magick_cmd, away_logo_cleaned_path, 
+            magick_cmd, away_logo_cleaned_path, # 1. Puts Logo on stack
             '(', 
-                '+clone',               # 1. Clone the original (colored) logo
-                '-alpha', 'extract',    # 2. Extract the alpha channel (creates a black silhouette)
-                '-fill', 'white',       # 3. Set the fill color to white
-                '-colorize', '100%',    # 4. Colorize the black silhouette white
-                '-blur', OUTLINE_BLUR,  # 5. Apply the slight blur for the glow effect
-            ')',
-            # --- START FIX: Ensure DstOver works correctly by flattening the glow image first ---
+                '+clone',               # 2. Clones Logo
+                '-alpha', 'extract',    # 3. Extracts alpha/silhouette
+                '-fill', 'white',       # 4. Sets color to white
+                '-colorize', '100%',    # 5. Makes silhouette white
+                '-blur', OUTLINE_BLUR,  # 6. Blurs for glow effect
+            ')', # Stack is now [Logo, Glow]
+            
+            '+swap', # FIX: Swap order to [Glow, Logo]
+            
             '-background', 'none',
-            '-compose', 'DstOver',      # Composition: Put Original (Source) OVER Shadow (Destination)
+            '-compose', 'Over', # Use default composition: Logo (top) OVER Glow (bottom)
             '-flatten', 
-            # --- END FIX ---
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
         
         # HOME TEAM GLOW (Cleaned -> Final)
         subprocess.run([
-            magick_cmd, home_logo_cleaned_path, 
+            magick_cmd, home_logo_cleaned_path, # 1. Puts Logo on stack
             '(', 
                 '+clone', 
                 '-alpha', 'extract', 
                 '-fill', 'white', 
                 '-colorize', '100%', 
                 '-blur', OUTLINE_BLUR, 
-            ')',
-            # --- START FIX ---
+            ')', # Stack is now [Logo, Glow]
+            
+            '+swap', # FIX: Swap order to [Glow, Logo]
+            
             '-background', 'none',
-            '-compose', 'DstOver', 
+            '-compose', 'Over', # Use default composition: Logo (top) OVER Glow (bottom)
             '-flatten', 
-            # --- END FIX ---
             home_logo_final_path
         ], check=True, capture_output=True, text=True)
 
