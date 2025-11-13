@@ -4,21 +4,16 @@ import datetime
 import os
 import subprocess
 import time
-import sys
+import shutil
 
 # --- Configuration ---
-# If a date is provided via command line (e.g., 'python script.py 20251113'), use it.
-if len(sys.argv) > 1:
-    TARGET_DATE = sys.argv[1]
-    try:
-        datetime.datetime.strptime(TARGET_DATE, "%Y%m%d")
-    except ValueError:
-        print("Invalid date format provided. Using today's date.")
-        TARGET_DATE = datetime.date.today().strftime("%Y%m%d")
-else:
-    TARGET_DATE = datetime.date.today().strftime("%Y%m%d")
+# Set the date for the schedule. Defaults to today's date.
+# Format: YYYYMMDD
+TARGET_DATE = datetime.date.today().strftime("%Y%m%d")
 
 # Define the sports and leagues to process.
+# To process ALL these, ensure your main execution loop iterates over this list.
+# The script defaults to running ALL defined configurations below.
 LEAGUE_CONFIGS = [
     {"sport": "basketball", "league": "nba", "name": "NBA"},
     {"sport": "football", "league": "nfl", "name": "NFL"},
@@ -26,34 +21,32 @@ LEAGUE_CONFIGS = [
     {"sport": "baseball", "league": "mlb", "name": "MLB"},
 ]
 
-# Function to generate the date-stamped output directory
-def get_output_dir():
-    # Use the TARGET_DATE (YYYYMMDD) to create a clean directory name (YYYY-MM-DD)
-    date_formatted = datetime.datetime.strptime(TARGET_DATE, "%Y%m%d").strftime("%Y-%m-%d")
-    return os.path.join("game_graphics", date_formatted)
-
+BASE_OUTPUT_DIR = "game_graphics"
 IMAGE_SIZE = "500x500" # Target final image size
-# Logo size to accommodate the 5-pixel border/glow
-LOGO_SIZE = "220x220" 
+LOGO_SIZE = "200x200" # Size to which the downloaded logos will be resized
 
-# --- Helper Functions ---
+# --- Helper Functions (No Change) ---
 
 def get_team_info(team_data):
     """Extracts required information (name, colors, logo URL) for a team."""
     abbrev = team_data.get('abbreviation', 'TBD')
-    color = "#" + team_data.get('color', 'CCCCCC').lstrip('#') 
-    alt_color = "#" + team_data.get('altColor', '000000').lstrip('#')
+    # Remove the initial '#' from color codes if they exist (sometimes the API provides them, sometimes not)
+    color = "#" + team_data.get('color', 'CCCCCC').lstrip('#')  # Default to gray if color missing
+    alt_color = "#" + team_data.get('altColor', '000000').lstrip('#') # Secondary color for border/text
 
     logo_url = None
     logos = team_data.get('logos')
     
+    # 1. Check the preferred 'logos' list structure
     if logos and len(logos) > 0:
+        # Prioritize the logo marked as 'default' if possible, otherwise take the first one.
         default_logo = next((logo for logo in logos if 'default' in logo.get('rel', [])), None)
         logo_to_use = default_logo if default_logo else logos[0]
         logo_url = logo_to_use.get('href')
 
+    # 2. Add fallback check for a simple 'logo' key which sometimes holds the URL string
     if not logo_url:
-        logo_url = team_data.get('logo')
+        logo_url = team_data.get('logo') # Check for single logo URL string
 
     return {
         'abbrev': abbrev,
@@ -75,188 +68,161 @@ def download_file(url, local_path):
         print(f"  > ERROR: Failed to download {url}. {e}")
         return False
 
-# --- Core Logic Functions (Modified for Background Removal and Crisp Glow) ---
+# --- Core Logic Functions (Modified) ---
 
-def get_magick_executable():
-    """Determines if 'convert' or 'magick' is the correct ImageMagick command."""
+def add_glow_to_logo(logo_path, output_path):
+    """
+    Adds a white glow effect around a logo using ImageMagick.
+    The glow follows the contours of the logo using its alpha channel.
+    Returns True on success, False on failure.
+    """
     try:
-        subprocess.run(['convert', '-version'], check=True, capture_output=True, text=True)
-        return 'convert'
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        try:
-            subprocess.run(['magick', '-version'], check=True, capture_output=True, text=True)
-            return 'magick'
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return 'convert' 
+        # ImageMagick command to add white glow:
+        # 1. Clone the image and extract alpha channel
+        # 2. Blur the alpha to create glow effect
+        # 3. Colorize the glow white
+        # 4. Composite original logo on top
+        command = [
+            'convert',
+            logo_path,
+            # Create the glow layer
+            '(',
+            '+clone',                      # Clone the image
+            '-background', 'white',        # Set background to white
+            '-shadow', '100x5+0+0',        # Create shadow (used for glow)
+            ')',
+            # Apply additional blur for softer glow
+            '(',
+            '+clone',
+            '-background', 'white',
+            '-shadow', '100x3+0+0',
+            ')',
+            # Composite: glow layers under the original
+            '-reverse',
+            '-background', 'none',
+            '-layers', 'merge',
+            '+repage',
+            output_path
+        ]
+        
+        subprocess.run(command, check=True, capture_output=True, text=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  > Warning: Failed to add glow to logo. {e.stderr}")
+        # If glow fails, copy original file as fallback
+        shutil.copy2(logo_path, output_path)
+        return False
 
 def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     """
-    Generates the final game graphic, including background removal and a crisp, 
-    shape-following white outline behind the logos.
+    Generates the final diagonal split, white-bordered game graphic with game time
+    using ImageMagick. Returns True on success, False on failure.
     """
-    magick_cmd = get_magick_executable()
-    
     game_id = f"{away_team['abbrev']}_vs_{home_team['abbrev']}"
     output_file = os.path.join(output_dir, f"{league_name}_{game_id}.png")
     
     # Paths for temporary downloaded logos
-    away_logo_dl_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_dl.png")
-    home_logo_dl_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_dl.png")
+    away_logo_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_logo.png")
+    home_logo_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_logo.png")
     
-    # Intermediate paths after resizing AND trimming (clean, transparent logo)
-    away_logo_transparent_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_transparent.png")
-    home_logo_transparent_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_transparent.png")
-
-    # Intermediate paths for the white GLOW ONLY layer
-    away_logo_glow_only_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_glow_only.png")
-    home_logo_glow_only_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_glow_only.png")
-    
-    # Final paths after adding the white glow/outline (THESE FILES ARE USED IN THE FINAL COMPOSITE)
-    away_logo_final_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_final.png")
-    home_logo_final_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_final.png")
-
+    # Paths for logos with glow effect applied
+    away_logo_glow_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_logo_glow.png")
+    home_logo_glow_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_logo_glow.png")
 
     print(f"\nProcessing Game: {league_name}: {away_team['abbrev']} @ {home_team['abbrev']}")
     
     # 1. Download Logos
     if away_team['logo_url'] and home_team['logo_url']:
         print(f"  > Downloading logos...")
-        if not download_file(away_team['logo_url'], away_logo_dl_path): return False 
-        if not download_file(home_team['logo_url'], home_logo_dl_path): return False
+        if not download_file(away_team['logo_url'], away_logo_path):
+            print(f"  > Skipping game {game_id} due to away logo download failure.")
+            return False 
+        if not download_file(home_team['logo_url'], home_logo_path):
+            print(f"  > Skipping game {game_id} due to home logo download failure.")
+            try: os.remove(away_logo_path)
+            except OSError: pass
+            return False
     else:
-        print(f"  > Skipping game: Logo URL(s) missing.")
+        print(f"  > Skipping game: Logo URL(s) missing from API data (Away URL: {'Present' if away_team['logo_url'] else 'Missing'}, Home URL: {'Present' if home_team['logo_url'] else 'Missing'}).")
         return False
 
-    # 1.5. Resize Logos and Aggressively Trim (Removing transparent canvas padding)
-    print("  > Resizing and trimming transparent padding...")
+    # 2. Apply white glow effect to logos
+    print(f"  > Adding white glow to logos...")
+    add_glow_to_logo(away_logo_path, away_logo_glow_path)
+    add_glow_to_logo(home_logo_path, home_logo_glow_path)
+
+    # 3. Time Formatting
     try:
-        
-        # AWAY TEAM: DL -> Transparent (Resize, then trim transparent padding)
-        subprocess.run([magick_cmd, away_logo_dl_path, 
-                        '-resize', LOGO_SIZE,
-                        # Trim any transparent padding and reset page offset
-                        '-trim', '+repage',
-                        away_logo_transparent_path],
-                       check=True, capture_output=True, text=True)
-
-        # HOME TEAM: DL -> Transparent (Resize, then trim transparent padding)
-        subprocess.run([magick_cmd, home_logo_dl_path, 
-                        '-resize', LOGO_SIZE, 
-                        '-trim', '+repage',
-                        home_logo_transparent_path],
-                       check=True, capture_output=True, text=True)
-                       
-    except subprocess.CalledProcessError as e:
-        print(f"  > ERROR: Logo resizing/trimming failed. Stderr: {e.stderr}")
-        return False
-
-    # --- GLOW/OUTLINE STEP (Puts the logo back over the glow) ---
-    print("  > Applying crisp white outline/glow using alpha method...")
-    
-    # The '3x2' setting means Radius=3, Sigma=2. Controls the width and sharpness of the glow.
-    OUTLINE_BLUR = '3x2' 
-    # The padding needed to allow the blur to spread without being cut off.
-    GLOW_PADDING = '5x5'
-    
-    try:
-        # 1. Create the dedicated white glow layer first (AWAY) - CRITICAL FIX HERE
-        subprocess.run([
-            magick_cmd, away_logo_transparent_path,
-            '-alpha', 'extract',      # 1. Extract alpha/silhouette
-            '-fill', 'white',         # 2. Set color to white
-            '-colorize', '100%',      # 3. Make silhouette solid white
-            # 4. CRITICAL: Force the transparent background and expand the canvas
-            '-virtual-pixel', 'Transparent', 
-            '-extent', f'{GLOW_PADDING}', # Expand the canvas by 5 pixels in each direction
-            '-blur', OUTLINE_BLUR,    # 5. Blur for glow effect
-            away_logo_glow_only_path
-        ], check=True, capture_output=True, text=True)
-
-        # 2. Composite the original transparent logo ON TOP of the white glow layer (AWAY)
-        # Note: We must center the original logo on the newly padded glow canvas.
-        subprocess.run([
-            magick_cmd, away_logo_glow_only_path, # Start with the glow layer (bottom)
-            away_logo_transparent_path,           # Overlay the clean transparent logo (top)
-            '-compose', 'Over',
-            '-gravity', 'Center',                 # Center the logo on the glow canvas
-            '-composite', 
-            away_logo_final_path
-        ], check=True, capture_output=True, text=True)
-        
-        
-        # 3. Create the dedicated white glow layer first (HOME) - CRITICAL FIX HERE
-        subprocess.run([
-            magick_cmd, home_logo_transparent_path,
-            '-alpha', 'extract',
-            '-fill', 'white', 
-            '-colorize', '100%',
-            # CRITICAL: Force the transparent background and expand the canvas
-            '-virtual-pixel', 'Transparent',
-            '-extent', f'{GLOW_PADDING}',
-            '-blur', OUTLINE_BLUR,
-            home_logo_glow_only_path
-        ], check=True, capture_output=True, text=True)
-
-        # 4. Composite the original transparent logo ON TOP of the white glow layer (HOME)
-        subprocess.run([
-            magick_cmd, home_logo_glow_only_path, # Start with the glow layer (bottom)
-            home_logo_transparent_path,           # Overlay the clean transparent logo (top)
-            '-compose', 'Over', 
-            '-gravity', 'Center',                 # Center the logo on the glow canvas
-            '-composite', 
-            home_logo_final_path
-        ], check=True, capture_output=True, text=True)
-
-    except subprocess.CalledProcessError as e:
-        print(f"  > ERROR: Applying glow failed. Stderr: {e.stderr}")
-        return False
-
-    
-    # 2. Time Formatting (Central Time Zone offset)
-    try:
+        # Assuming ISO format like 2025-11-12T00:00Z. Parse as UTC.
         dt_utc = datetime.datetime.strptime(raw_time_str, '%Y-%m-%dT%H:%MZ').replace(tzinfo=datetime.timezone.utc)
-        dt_local = dt_utc - datetime.timedelta(hours=6) # UTC-6 for Central Time (CT)
+        
+        # Adjusting to Central Time (CT). UTC-6 offset.
+        # This assumes no daylight savings time adjustment, which is acceptable for a daily sports schedule.
+        dt_local = dt_utc - datetime.timedelta(hours=6) 
         game_time_str = dt_local.strftime('%I:%M %p CT')
+        # Remove leading zero for cleaner time display (e.g., '07:30 PM' -> '7:30 PM')
         if game_time_str.startswith('0'):
             game_time_str = game_time_str[1:]
     except Exception as e:
         print(f"  > Warning: Could not parse time string '{raw_time_str}'. Error: {e}")
         game_time_str = "TIME TBD"
 
-    # 3. ImageMagick Command Construction (Diagonal Split, White Line, Logos, Text)
+    # 4. ImageMagick Command Construction (Diagonal Split and White Line)
+
+    # Logo X positions remain centered in their 250px halves: Away +25, Home +275
+    # Logo Y positions adjusted for increased visual separation from the diagonal line:
+    # Away (Top-Right Quadrant): Moved UP 60px: 150 -> +90
+    # Home (Bottom-Left Quadrant): Moved DOWN 60px: 150 -> +210
+    
     command = [
-        magick_cmd, 
+        'convert', 
         '-size', IMAGE_SIZE, 
+        
+        # 1. Create the base canvas (Away Team Color, covering the Top-Right portion)
         f'xc:{away_team["color"]}', 
         
+        # 2. Draw the Home Team's color (Bottom-Left triangle)
+        # Polygon points: (0, 500) bottom-left, (500, 0) top-right, (500, 500) bottom-right
         '-fill', home_team['color'],
         '-draw', 'polygon 0,500 500,0 500,500', 
         
+        # 3. Draw the white diagonal dividing line (4px stroke)
+        # Line from (5, 495) to (495, 5) to create a centered white line
         '-strokewidth', '4',
         '-stroke', 'white',
         '-fill', 'none',
         '-draw', 'line 5,495 495,5',
         
-        # 4. Composite Logos (Use the files with the glow)
-        away_logo_final_path,
-        '-geometry', '+20+80', '-composite', 
+        # 4. Composite Logos (with glow effect)
+        # Away Logo (Top-Right area) -> Y moved to +90
+        '(', away_logo_glow_path, '-resize', LOGO_SIZE, ')',
+        '-geometry', '+25+90', '-composite', 
         
-        home_logo_final_path,
-        '-geometry', '+270+200', '-composite', 
+        # Home Logo (Bottom-Left area) -> Y moved to +210
+        '(', home_logo_glow_path, '-resize', LOGO_SIZE, ')',
+        '-geometry', '+275+210', '-composite',
         
         # 5. Add Game Time Text Annotation
         '-pointsize', '48',
-        '-font', 'Noto-Sans-Light',
+        '-font', 'Noto-Sans-Light', # Attempt to use a lighter weight font
         '-fill', 'white', 
         '-gravity', 'North',
         '-annotate', '+0+20', game_time_str, 
         
+        # 6. Final Output
         output_file
     ]
 
     print(f"  > Generating graphic: {output_file}")
     
     try:
+        # Check if the desired font (Noto-Sans-Light) is available; if not, fall back to a generic sans-serif
+        font_check_command = ['identify', '-list', 'font', 'Noto-Sans-Light']
+        result = subprocess.run(font_check_command, capture_output=True, text=True)
+        if result.returncode != 0:
+             # Fallback to a common, less bold sans-serif
+            command[13] = 'sans-serif' 
+        
         subprocess.run(command, check=True, capture_output=True, text=True)
         print(f"  > SUCCESS: Graphic saved to {output_file}")
         return True
@@ -265,17 +231,13 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > Stderr: {e.stderr}")
         return False
     finally:
-        # Clean up all temporary logo files
-        temp_files = [away_logo_dl_path, home_logo_dl_path, 
-                      away_logo_transparent_path, home_logo_transparent_path,
-                      away_logo_glow_only_path, home_logo_glow_only_path,
-                      away_logo_final_path, home_logo_final_path]
-        for f in temp_files:
+        # Clean up temporary logo files
+        for temp_file in [away_logo_path, home_logo_path, away_logo_glow_path, home_logo_glow_path]:
             try:
-                os.remove(f)
-            except OSError: 
-                pass
-
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except OSError as e:
+                print(f"  > Warning: Could not remove temporary file {temp_file}. {e}")
 
 def fetch_schedule(sport, league):
     """Fetches the daily scoreboard data for a specific sport/league."""
@@ -289,14 +251,14 @@ def fetch_schedule(sport, league):
         print(f"Error fetching API data for {league.upper()}: {e}")
         return None
 
-def process_league(config, base_output_dir):
+def process_league(config):
     """Processes all games for a single league configuration."""
     SPORT = config['sport']
     LEAGUE = config['league']
     LEAGUE_NAME = config['name']
     
-    # Create league-specific subdirectory within the date-stamped directory
-    output_dir = os.path.join(base_output_dir, LEAGUE)
+    # Create league-specific output directory
+    output_dir = os.path.join(BASE_OUTPUT_DIR, LEAGUE)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
         print(f"Created output directory: {output_dir}")
@@ -313,10 +275,13 @@ def process_league(config, base_output_dir):
     processed_count = 0
     for event in data['events']:
         
+        # Extract the UTC time string for display
         raw_time_str = event.get('date')
         
+        # API structure check
         competitions = event.get('competitions', [])
         if not competitions or 'competitors' not in competitions[0]:
+            print(f"Skipping event {event.get('id', 'N/A')}: No competition data found.")
             continue
             
         competitors = competitions[0]['competitors']
@@ -325,12 +290,13 @@ def process_league(config, base_output_dir):
         home_data = next((c['team'] for c in competitors if c['homeAway'] == 'home'), None)
         
         if not away_data or not home_data:
+            print(f"Skipping event {event.get('id', 'N/A')}: Could not identify both home and away teams.")
             continue
             
         away_team = get_team_info(away_data)
-            
         home_team = get_team_info(home_data)
         
+        # Check for minimum required info
         if not all([away_team['abbrev'], away_team['color'], home_team['abbrev'], home_team['color']]):
             print(f"Skipping game due to missing required team data (abbrev or color).")
             continue
@@ -338,7 +304,7 @@ def process_league(config, base_output_dir):
         if generate_image(away_team, home_team, raw_time_str, LEAGUE_NAME.lower(), output_dir):
             processed_count += 1
             
-        time.sleep(0.5)
+        time.sleep(0.5) # Be kind to the API endpoints
         
     print(f"\n--- {LEAGUE_NAME} Processing Finished ---")
     print(f"Successfully created {processed_count} {LEAGUE_NAME} graphic(s).")
@@ -349,24 +315,19 @@ def process_league(config, base_output_dir):
 def main():
     """Main function to run the process for all configured leagues."""
     
-    # Get the date-stamped output directory (e.g., game_graphics/2025-11-13)
-    base_output_dir = get_output_dir()
-    
     # Ensure the base output directory exists
-    if not os.path.exists(base_output_dir):
-        os.makedirs(base_output_dir)
-        print(f"Created base output directory: {base_output_dir}")
+    if not os.path.exists(BASE_OUTPUT_DIR):
+        os.makedirs(BASE_OUTPUT_DIR)
+        print(f"Created base output directory: {BASE_OUTPUT_DIR}")
 
-    print(f"--- Starting Script for Date: {TARGET_DATE} ---")
-    
     total_processed = 0
     
     for config in LEAGUE_CONFIGS:
-        total_processed += process_league(config, base_output_dir)
+        total_processed += process_league(config)
         
     print(f"\n--- Script Finished ---")
-    print(f"Total graphics successfully generated: {total_processed}")
-    print(f"Output files are in the '{base_output_dir}/' subdirectories.")
+    print(f"Total graphics successfully generated across all leagues: {total_processed}")
+    print(f"Output files are in the '{BASE_OUTPUT_DIR}/' subdirectories.")
 
 
 if __name__ == "__main__":
