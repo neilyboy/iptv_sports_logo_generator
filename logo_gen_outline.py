@@ -107,11 +107,11 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     away_logo_resized_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_resized.png")
     home_logo_resized_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_resized.png")
     
-    # NEW: Intermediate path after cleaning/removing white background
+    # Intermediate path after cleaning/removing white background
     away_logo_cleaned_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_cleaned.png")
     home_logo_cleaned_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_cleaned.png")
     
-    # Final paths after adding the white glow
+    # Final paths after adding the white glow/outline
     away_logo_final_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_final.png")
     home_logo_final_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_final.png")
 
@@ -164,23 +164,29 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > ERROR: Background removal failed. Stderr: {e.stderr}")
         return False
 
-    # --- GLOW STEP (Applying a crisp outline/shadow) ---
-    print("  > Applying crisp white outline/glow...")
+    # --- GLOW/OUTLINE STEP (Using alpha extract for cleaner composition) ---
+    # This method creates a white silhouette, blurs it slightly, and places it 
+    # cleanly behind the original colored logo.
+    print("  > Applying crisp white outline/glow using alpha method...")
+    
+    # The '3x2' setting means Radius=3, Sigma=2. Controls the width and sharpness of the glow.
+    OUTLINE_BLUR = '3x2' 
+    
     try:
-        # **CRISP OUTLINE SETTINGS:**
-        # 100% opacity, 2 pixel blur radius (sharper than 5), 0 offset.
-        SHADOW_SETTINGS = '100x2+0+0'
-        
         # AWAY TEAM GLOW (Cleaned -> Final)
         subprocess.run([
             magick_cmd, away_logo_cleaned_path, 
-            '(', '+clone', 
-                '-background', 'white',
-                '-shadow', SHADOW_SETTINGS, 
+            '(', 
+                '+clone',               # 1. Clone the original (colored) logo
+                '-alpha', 'extract',    # 2. Extract the alpha channel (creates a black silhouette)
+                '-fill', 'white',       # 3. Set the fill color to white
+                '-colorize', '100%',    # 4. Colorize the black silhouette white
+                '-blur', OUTLINE_BLUR,  # 5. Apply the slight blur for the glow effect
             ')',
-            '+swap', # Swap the order so the original logo is on top of the shadow
+            # Now the stack is: [Original Logo], [White Shadow]
+            '+swap',                    # 6. Swap the order: [White Shadow] [Original Logo]
             '-background', 'none',
-            '-compose', 'DstOver', # Crucial: Composite the original logo (Source) OVER the shadow (Destination)
+            '-compose', 'DstOver',      # 7. Composition: Put Original (Source) OVER Shadow (Destination)
             '-flatten', 
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
@@ -188,9 +194,12 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         # HOME TEAM GLOW (Cleaned -> Final)
         subprocess.run([
             magick_cmd, home_logo_cleaned_path, 
-            '(', '+clone', 
-                '-background', 'white',
-                '-shadow', SHADOW_SETTINGS, 
+            '(', 
+                '+clone', 
+                '-alpha', 'extract', 
+                '-fill', 'white', 
+                '-colorize', '100%', 
+                '-blur', OUTLINE_BLUR, 
             ')',
             '+swap', 
             '-background', 'none',
@@ -321,6 +330,7 @@ def process_league(config, base_output_dir):
             continue
             
         away_team = get_team_info(away_data)
+            
         home_team = get_team_info(home_data)
         
         if not all([away_team['abbrev'], away_team['color'], home_team['abbrev'], home_team['color']]):
