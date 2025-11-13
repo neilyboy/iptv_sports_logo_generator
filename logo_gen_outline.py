@@ -75,7 +75,7 @@ def download_file(url, local_path):
         print(f"  > ERROR: Failed to download {url}. {e}")
         return False
 
-# --- Core Logic Functions (Modified for Background Removal and Glow) ---
+# --- Core Logic Functions (Modified for Background Removal and Crisp Glow) ---
 
 def get_magick_executable():
     """Determines if 'convert' or 'magick' is the correct ImageMagick command."""
@@ -91,8 +91,8 @@ def get_magick_executable():
 
 def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     """
-    Generates the final game graphic, now including a background removal step 
-    before applying the shape-following white glow around logos.
+    Generates the final game graphic, including background removal and a crisp, 
+    shape-following white outline behind the logos.
     """
     magick_cmd = get_magick_executable()
     
@@ -141,7 +141,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > ERROR: Logo resizing failed. Stderr: {e.stderr}")
         return False
         
-    # --- NEW STEP: Background Removal ---
+    # --- Background Removal ---
     print("  > Removing potential white background...")
     try:
         # Use fuzz to remove white pixels, making the background truly transparent
@@ -164,21 +164,23 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > ERROR: Background removal failed. Stderr: {e.stderr}")
         return False
 
-    # --- GLOW STEP (Now using the cleaned logo) ---
-    print("  > Applying shape-following white outline/glow...")
+    # --- GLOW STEP (Applying a crisp outline/shadow) ---
+    print("  > Applying crisp white outline/glow...")
     try:
+        # **CRISP OUTLINE SETTINGS:**
+        # 100% opacity, 2 pixel blur radius (sharper than 5), 0 offset.
+        SHADOW_SETTINGS = '100x2+0+0'
         
         # AWAY TEAM GLOW (Cleaned -> Final)
         subprocess.run([
             magick_cmd, away_logo_cleaned_path, 
             '(', '+clone', 
                 '-background', 'white',
-                # Create a shadow that is 100% opaque, 5px radius/blur, and 0 offset (centered)
-                '-shadow', '100x5+0+0', 
+                '-shadow', SHADOW_SETTINGS, 
             ')',
-            '+swap', 
+            '+swap', # Swap the order so the original logo is on top of the shadow
             '-background', 'none',
-            '-compose', 'DstOver', # Places the original image over the shadow clone
+            '-compose', 'DstOver', # Crucial: Composite the original logo (Source) OVER the shadow (Destination)
             '-flatten', 
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
@@ -188,7 +190,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
             magick_cmd, home_logo_cleaned_path, 
             '(', '+clone', 
                 '-background', 'white',
-                '-shadow', '100x5+0+0', 
+                '-shadow', SHADOW_SETTINGS, 
             ')',
             '+swap', 
             '-background', 'none',
@@ -228,6 +230,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         '-draw', 'line 5,495 495,5',
         
         # 4. Composite Logos (Using the final, glow-added files)
+        # Note: These files now contain the logo AND the crisp outline/glow behind it.
         away_logo_final_path,
         '-geometry', '+20+80', '-composite', 
         
@@ -255,7 +258,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > Stderr: {e.stderr}")
         return False
     finally:
-        # Clean up all temporary logo files, including the new cleaned paths
+        # Clean up all temporary logo files
         temp_files = [away_logo_dl_path, home_logo_dl_path, 
                       away_logo_resized_path, home_logo_resized_path,
                       away_logo_cleaned_path, home_logo_cleaned_path,
