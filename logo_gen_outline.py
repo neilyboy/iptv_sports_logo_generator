@@ -33,7 +33,7 @@ def get_output_dir():
     return os.path.join("game_graphics", date_formatted)
 
 IMAGE_SIZE = "500x500" # Target final image size
-# Slightly larger logo size to accommodate the 5-pixel border/glow
+# Logo size to accommodate the 5-pixel border/glow
 LOGO_SIZE = "220x220" 
 
 # --- Helper Functions ---
@@ -75,7 +75,7 @@ def download_file(url, local_path):
         print(f"  > ERROR: Failed to download {url}. {e}")
         return False
 
-# --- Core Logic Functions (Modified for Shape-Following Glow) ---
+# --- Core Logic Functions (Modified for Background Removal and Glow) ---
 
 def get_magick_executable():
     """Determines if 'convert' or 'magick' is the correct ImageMagick command."""
@@ -91,7 +91,8 @@ def get_magick_executable():
 
 def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     """
-    Generates the final game graphic, now including a shape-following white glow around logos.
+    Generates the final game graphic, now including a background removal step 
+    before applying the shape-following white glow around logos.
     """
     magick_cmd = get_magick_executable()
     
@@ -106,7 +107,11 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
     away_logo_resized_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_resized.png")
     home_logo_resized_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_resized.png")
     
-    # Final paths after adding the white glow (These are used for the composite)
+    # NEW: Intermediate path after cleaning/removing white background
+    away_logo_cleaned_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_cleaned.png")
+    home_logo_cleaned_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_cleaned.png")
+    
+    # Final paths after adding the white glow
     away_logo_final_path = os.path.join(output_dir, f"temp_{away_team['abbrev']}_final.png")
     home_logo_final_path = os.path.join(output_dir, f"temp_{home_team['abbrev']}_final.png")
 
@@ -136,15 +141,36 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > ERROR: Logo resizing failed. Stderr: {e.stderr}")
         return False
         
-    # 1.6. Add White Border (Outline) to Logos
-    print("  > Adding white outline/glow...")
+    # --- NEW STEP: Background Removal ---
+    print("  > Removing potential white background...")
     try:
-        # ImageMagick command to create a white shadow/glow that follows the logo's shape
-        # This uses the +clone -shadow technique for a shape-following glow/outline.
+        # Use fuzz to remove white pixels, making the background truly transparent
+        FUZZ_LEVEL = '10%' 
         
-        # AWAY TEAM GLOW
+        # Resized -> Cleaned
+        subprocess.run([magick_cmd, away_logo_resized_path, 
+                        '-fuzz', FUZZ_LEVEL, 
+                        '-transparent', 'white', 
+                        away_logo_cleaned_path],
+                       check=True, capture_output=True, text=True)
+
+        subprocess.run([magick_cmd, home_logo_resized_path, 
+                        '-fuzz', FUZZ_LEVEL, 
+                        '-transparent', 'white', 
+                        home_logo_cleaned_path],
+                       check=True, capture_output=True, text=True)
+                       
+    except subprocess.CalledProcessError as e:
+        print(f"  > ERROR: Background removal failed. Stderr: {e.stderr}")
+        return False
+
+    # --- GLOW STEP (Now using the cleaned logo) ---
+    print("  > Applying shape-following white outline/glow...")
+    try:
+        
+        # AWAY TEAM GLOW (Cleaned -> Final)
         subprocess.run([
-            magick_cmd, away_logo_resized_path, 
+            magick_cmd, away_logo_cleaned_path, 
             '(', '+clone', 
                 '-background', 'white',
                 # Create a shadow that is 100% opaque, 5px radius/blur, and 0 offset (centered)
@@ -157,9 +183,9 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
             away_logo_final_path
         ], check=True, capture_output=True, text=True)
 
-        # HOME TEAM GLOW
+        # HOME TEAM GLOW (Cleaned -> Final)
         subprocess.run([
-            magick_cmd, home_logo_resized_path, 
+            magick_cmd, home_logo_cleaned_path, 
             '(', '+clone', 
                 '-background', 'white',
                 '-shadow', '100x5+0+0', 
@@ -172,7 +198,7 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         ], check=True, capture_output=True, text=True)
 
     except subprocess.CalledProcessError as e:
-        print(f"  > ERROR: Adding glow failed. Stderr: {e.stderr}")
+        print(f"  > ERROR: Applying glow failed. Stderr: {e.stderr}")
         return False
 
     
@@ -203,10 +229,10 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         
         # 4. Composite Logos (Using the final, glow-added files)
         away_logo_final_path,
-        '-geometry', '+20+80', '-composite', # Adjusted position for new size
+        '-geometry', '+20+80', '-composite', 
         
         home_logo_final_path,
-        '-geometry', '+270+200', '-composite', # Adjusted position for new size
+        '-geometry', '+270+200', '-composite', 
         
         # 5. Add Game Time Text Annotation
         '-pointsize', '48',
@@ -229,9 +255,10 @@ def generate_image(away_team, home_team, raw_time_str, league_name, output_dir):
         print(f"  > Stderr: {e.stderr}")
         return False
     finally:
-        # Clean up all temporary logo files
+        # Clean up all temporary logo files, including the new cleaned paths
         temp_files = [away_logo_dl_path, home_logo_dl_path, 
                       away_logo_resized_path, home_logo_resized_path,
+                      away_logo_cleaned_path, home_logo_cleaned_path,
                       away_logo_final_path, home_logo_final_path]
         for f in temp_files:
             try:
